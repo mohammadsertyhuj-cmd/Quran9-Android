@@ -7,19 +7,23 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
 
     steps:
-      - name: Checkout project
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract project
-        run: |
-          mkdir -p appsrc
-          unzip -o quran9_android_ready.zip -d appsrc
-          cp -a appsrc/. .
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -27,35 +31,92 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install system dependencies
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |-
+            platform-tools
+            platforms;android-34
+            build-tools;34.0.0
+            ndk;28.2.13676358
+
+      - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             build-essential git zip unzip \
-            python3-pip python3-setuptools \
-            autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev \
-            libffi-dev libssl-dev cmake \
-            libltdl-dev
+            autoconf automake autopoint gettext libtool libltdl-dev pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 \
+            libffi-dev libssl-dev cmake
+
+      - name: Prepare Android SDK and NDK for Buildozer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          : "${ANDROID_HOME:?Android SDK was not configured by setup-android}"
+          PLATFORM_DIR="$HOME/.buildozer/android/platform"
+          NDK_DIR="$ANDROID_HOME/ndk/28.2.13676358"
+
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -d "$NDK_DIR"
+
+          mkdir -p "$PLATFORM_DIR" "$ANDROID_HOME/tools/bin"
+          ln -sfn "$ANDROID_HOME" "$PLATFORM_DIR/android-sdk"
+          ln -sfn "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "$ANDROID_HOME/tools/bin/sdkmanager"
+          ln -sfn "$NDK_DIR" "$PLATFORM_DIR/android-ndk-r28c"
+
+          "$ANDROID_HOME/tools/bin/sdkmanager" --version
+          test -f "$PLATFORM_DIR/android-ndk-r28c/source.properties"
+
+      - name: Extract and validate Quran9 project
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f quran9_android_ready.zip
+          mkdir -p appsrc
+          unzip -q quran9_android_ready.zip -d appsrc
+          test -f appsrc/buildozer.spec
+          test -f appsrc/main.py
+          cp -a appsrc/. .
+
+          sed -i -E 's/^android\.ndk[[:space:]]*=.*/android.ndk = 28c/' buildozer.spec
+
+          echo '--- Project files ---'
+          test -f main.py
+          test -f word_manager.py
+          test -f data/vocabulary.json
+          grep -E '^(title|package\.name|package\.domain|requirements|android\.api|android\.minapi|android\.ndk|android\.archs)[[:space:]]*=' buildozer.spec
 
       - name: Install Buildozer and Cython
         run: |
-          python3 -m pip install --user --upgrade pip setuptools wheel
-          python3 -m pip install --user buildozer cython==0.29.36
+          python -m pip install --user --upgrade pip setuptools wheel
+          python -m pip install --user 'buildozer==1.5.0' 'Cython==0.29.36'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Verify installation
+      - name: Verify build tools
         run: |
-          which buildozer
           buildozer --version
           cython --version
+          java -version
+          python --version
 
-      - name: Build APK
-        run: buildozer android debug
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set +e
+          buildozer -v android debug 2>&1 | tee build.log
+          result=${PIPESTATUS[0]}
+          echo '========== LAST 150 BUILD LOG LINES =========='
+          tail -n 150 build.log
+          exit "$result"
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Quran9-APK
+          name: Quran9-debug-APK
           path: bin/*.apk
           if-no-files-found: error
+          retention-days: 7
