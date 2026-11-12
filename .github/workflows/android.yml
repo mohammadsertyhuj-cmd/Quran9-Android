@@ -4,17 +4,22 @@ name: Build Quran9 APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout
+      - name: Checkout project
         uses: actions/checkout@v4
 
       - name: Extract project
-        run: unzip -o quran9_android_ready.zip -d .
+        run: |
+          mkdir -p appsrc
+          unzip -o quran9_android_ready.zip -d appsrc
+          cp -a appsrc/. .
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -22,20 +27,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git zip unzip python3-pip python3-venv autoconf libtool pkg-config zlib1g-dev libncurses5-dev libffi-dev libssl-dev cmake
+          sudo apt-get install -y \
+            build-essential git zip unzip \
+            python3-pip python3-setuptools \
+            autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev \
+            libffi-dev libssl-dev cmake \
+            libltdl-dev
 
       - name: Install Buildozer and Cython
         run: |
-          python3 -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install buildozer cython==0.29.36
-          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+          python3 -m pip install --user --upgrade pip setuptools wheel
+          python3 -m pip install --user buildozer cython==0.29.36
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Cython
-        run: cython --version
+      - name: Verify installation
+        run: |
+          which buildozer
+          buildozer --version
+          cython --version
 
       - name: Build APK
         run: buildozer android debug
